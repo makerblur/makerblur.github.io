@@ -165,6 +165,28 @@
     background:rgba(31,174,159,0.18);
   }
 
+  /* ---- Crop Overlay Box ---- */
+  .crop-box{
+    position:absolute;
+    border:2px dashed var(--pink);
+    box-shadow:0 0 0 4000px rgba(36,31,22,0.4);
+    box-sizing:border-box;
+    cursor:move;
+    display:none;
+    z-index:4;
+  }
+  .crop-handle{
+    position:absolute;
+    width:10px;height:10px;
+    background:var(--white);
+    border:2px solid var(--line);
+    border-radius:50%;
+  }
+  .crop-handle.tl{top:-6px;left:-6px;cursor:nwse-resize;}
+  .crop-handle.tr{top:-6px;right:-6px;cursor:nesw-resize;}
+  .crop-handle.bl{bottom:-6px;left:-6px;cursor:nesw-resize;}
+  .crop-handle.br{bottom:-6px;right:-6px;cursor:nwse-resize;}
+
   .stage-empty-hint{
     position:absolute;
     top:14px; left:18px;
@@ -344,7 +366,6 @@
     text-align:center;
     margin-top:30px;
     font-family:'JetBrains Mono',monospace;
-    /*font-size:11px;*/
     font-size:16px;
     color:#8a8064;
   }
@@ -374,6 +395,12 @@
       <div class="canvas-holder" id="canvasHolder" style="display:none;">
         <canvas id="work"></canvas>
         <div class="brush-cursor" id="brushCursor"></div>
+        <div id="cropBox" class="crop-box">
+          <div class="crop-handle tl"></div>
+          <div class="crop-handle tr"></div>
+          <div class="crop-handle bl"></div>
+          <div class="crop-handle br"></div>
+        </div>
       </div>
       <div class="stage-empty-hint" id="hint" style="display:none;">drag to paint blur</div>
       <div class="zoom-bar" id="zoomBar" style="display:none;">
@@ -387,11 +414,16 @@
 
     <div class="sidebar">
       <div class="panel">
-        <h2><span class="dot"></span>Brush</h2>
+        <h2><span class="dot"></span>Brush Tools</h2>
         <div class="mode-toggle">
           <button id="modeBlur" class="active">Blur</button>
           <button id="modeErase">Restore</button>
           <button id="modeMove">✋ Move</button>
+          <button id="modeCrop">✂️ Crop</button>
+        </div>
+        <div id="cropActions" style="display:none; gap:10px; margin-bottom:14px;">
+          <button class="btn primary" id="applyCropBtn" style="margin-top:0; flex:1;">✔️ Apply</button>
+          <button class="btn ghost" id="cancelCropBtn" style="margin-top:0; flex:1;">✕ Cancel</button>
         </div>
         <label class="field">Brush size <span class="val" id="brushSizeVal">60</span></label>
         <input type="range" id="brushSize" min="10" max="220" value="60">
@@ -437,7 +469,6 @@
     </div>
   </div>
 
-  <!-- <footer>images are processed locally in your browser — nothing is uploaded anywhere</footer> -->
   <footer>Created by <a href="https://www.instagram.com/molbrikolat/" style="text-decoration: none;" target="_blank" rel="noopener">mol brikolat</a></footer>
 </div>
 
@@ -461,6 +492,12 @@
   const modeBlurBtn = document.getElementById('modeBlur');
   const modeEraseBtn = document.getElementById('modeErase');
   const modeMoveBtn = document.getElementById('modeMove');
+  const modeCropBtn = document.getElementById('modeCrop');
+  const cropBox = document.getElementById('cropBox');
+  const cropActions = document.getElementById('cropActions');
+  const applyCropBtn = document.getElementById('applyCropBtn');
+  const cancelCropBtn = document.getElementById('cancelCropBtn');
+
   const brushSizeInput = document.getElementById('brushSize');
   const brushSizeVal = document.getElementById('brushSizeVal');
   const blurStrengthInput = document.getElementById('blurStrength');
@@ -491,12 +528,15 @@
   let history = [];
   let hasImage = false;
   let needsRender = false;
-  let fitPct = 100;   // zoom % that fits the image inside the stage
-  let zoomPct = 100;  // current zoom, as % of the image's real pixel size
+  let fitPct = 100;   
+  let zoomPct = 100;  
   const ZOOM_MIN = 15, ZOOM_MAX = 400;
   let panning = false;
   let panStartX = 0, panStartY = 0, panStartScrollLeft = 0, panStartScrollTop = 0;
-  let pinch = null; // {startDist, startZoom}
+  let pinch = null; 
+
+  let cropData = { x: 0, y: 0, w: 0, h: 0 };
+  let cropStart = null, activeHandle = null;
 
   function offscreen(w, h){
     const c = document.createElement('canvas');
@@ -541,11 +581,11 @@
     exportBtn.disabled = false;
     hasImage = true;
 
-    // pick a starting zoom that fits the image inside the visible stage
     const availW = Math.max(120, stage.clientWidth - 40);
     const availH = Math.max(120, window.innerHeight * 0.6);
     fitPct = Math.min(100, (availW / W) * 100, (availH / H) * 100);
     setZoom(fitPct);
+    setMode('blur');
   }
 
   function setZoom(pct){
@@ -555,6 +595,7 @@
     zoomPctLabel.textContent = Math.round(zoomPct) + '%';
     zoomSlider.value = Math.round(zoomPct);
     stage.classList.toggle('zoomed-in', zoomPct > fitPct + 1);
+    if(mode === 'crop') updateCropBoxDOM();
   }
 
   zoomInBtn.addEventListener('click', () => setZoom(zoomPct + 25));
@@ -562,7 +603,6 @@
   zoomFitBtn.addEventListener('click', () => setZoom(fitPct));
   zoomSlider.addEventListener('input', () => setZoom(parseFloat(zoomSlider.value)));
 
-  // Ctrl/Cmd + scroll wheel to zoom, like most image editors
   stage.addEventListener('wheel', e => {
     if(!hasImage || !(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
@@ -570,13 +610,6 @@
   }, { passive: false });
 
   function regenerateBlur(){
-    // Not using ctx.filter = 'blur()' here on purpose: Safari's support
-    // for canvas filters has been inconsistent, and on iPhones it can
-    // silently no-op — the mask/paint pipeline all works, there's just
-    // nothing visibly different to reveal. Repeated half-size downscaling
-    // (like mipmapping) then scaling back up gives a soft, convincing
-    // blur using only drawImage + smoothing, which every browser handles
-    // the same way.
     const strength = Math.max(1, parseInt(blurStrengthInput.value, 10));
     const targetW = Math.max(1, Math.round(W / strength));
     const targetH = Math.max(1, Math.round(H / strength));
@@ -666,11 +699,6 @@
   }
 
   function paintCoords(clientX, clientY){
-    // clientX/clientY + getBoundingClientRect work reliably for both
-    // mouse and touch across all browsers (offsetX/offsetY are not
-    // consistently reported on touch-originated pointer events on some
-    // mobile browsers, which broke brushing on phones). The canvas has
-    // no border of its own (it's on the wrapper), so rect == content box.
     const rect = canvas.getBoundingClientRect();
     const scaleX = W / rect.width;
     const scaleY = H / rect.height;
@@ -744,17 +772,104 @@
     stage.scrollTop += (rectAfter.height - oldH) * fy;
   }
 
-  // Mouse / pen via Pointer Events (skip 'touch' pointerType — handled
-  // below by dedicated touch listeners, which are far more reliably
-  // supported for touch on mobile browsers).
+  // ---------- Cropping Logic ----------
+  function initCropBox(){
+    cropData.x = Math.round(W * 0.1);
+    cropData.y = Math.round(H * 0.1);
+    cropData.w = Math.round(W * 0.8);
+    cropData.h = Math.round(H * 0.8);
+    updateCropBoxDOM();
+  }
+
+  function updateCropBoxDOM(){
+    const rect = canvas.getBoundingClientRect();
+    const holderRect = canvasHolder.getBoundingClientRect();
+    const scale = rect.width / W;
+    
+    cropBox.style.left = ((rect.left - holderRect.left) + cropData.x * scale) + 'px';
+    cropBox.style.top = ((rect.top - holderRect.top) + cropData.y * scale) + 'px';
+    cropBox.style.width = (cropData.w * scale) + 'px';
+    cropBox.style.height = (cropData.h * scale) + 'px';
+  }
+
+  function applyCrop(){
+    if(cropData.w < 10 || cropData.h < 10) return;
+    
+    const newBase = offscreen(cropData.w, cropData.h);
+    newBase.getContext('2d').drawImage(baseCanvas, cropData.x, cropData.y, cropData.w, cropData.h, 0, 0, cropData.w, cropData.h);
+    
+    const newMask = offscreen(cropData.w, cropData.h);
+    newMask.getContext('2d').drawImage(maskCanvas, cropData.x, cropData.y, cropData.w, cropData.h, 0, 0, cropData.w, cropData.h);
+
+    W = cropData.w; H = cropData.h;
+    canvas.width = W; canvas.height = H;
+    
+    baseCanvas = newBase; baseCtx = baseCanvas.getContext('2d');
+    maskCanvas = newMask; maskCtx = maskCanvas.getContext('2d');
+
+    regenerateBlur();
+    saveHistory();
+    setZoom(zoomPct);
+    render();
+    setMode('blur');
+  }
+
+  cropBox.addEventListener('pointerdown', e => {
+    e.stopPropagation();
+    if(mode !== 'crop') return;
+    activeHandle = e.target.classList.contains('crop-handle') ? e.target.classList[1] : 'move';
+    cropStart = {
+      clientX: e.clientX, clientY: e.clientY,
+      x: cropData.x, y: cropData.y, w: cropData.w, h: cropData.h,
+      scale: canvas.getBoundingClientRect().width / W
+    };
+    cropBox.setPointerCapture(e.pointerId);
+  });
+
+  cropBox.addEventListener('pointermove', e => {
+    if(!cropStart) return;
+    e.stopPropagation();
+    const dx = (e.clientX - cropStart.clientX) / cropStart.scale;
+    const dy = (e.clientY - cropStart.clientY) / cropStart.scale;
+
+    let x = cropStart.x, y = cropStart.y, w = cropStart.w, h = cropStart.h;
+
+    if(activeHandle === 'move') {
+      x = Math.max(0, Math.min(W - w, cropStart.x + dx));
+      y = Math.max(0, Math.min(H - h, cropStart.y + dy));
+    } else {
+      if(activeHandle.includes('t')) {
+        const newY = Math.max(0, Math.min(cropStart.y + cropStart.h - 20, cropStart.y + dy));
+        h = cropStart.y + cropStart.h - newY; y = newY;
+      }
+      if(activeHandle.includes('b')) h = Math.max(20, Math.min(H - cropStart.y, cropStart.h + dy));
+      if(activeHandle.includes('l')) {
+        const newX = Math.max(0, Math.min(cropStart.x + cropStart.w - 20, cropStart.x + dx));
+        w = cropStart.x + cropStart.w - newX; x = newX;
+      }
+      if(activeHandle.includes('r')) w = Math.max(20, Math.min(W - cropStart.x, cropStart.w + dx));
+    }
+
+    cropData = { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+    updateCropBoxDOM();
+  });
+
+  window.addEventListener('pointerup', () => { cropStart = null; activeHandle = null; });
+
+  applyCropBtn.addEventListener('click', applyCrop);
+  cancelCropBtn.addEventListener('click', () => setMode('blur'));
+
+  // Pointer interaction pipelines
   canvas.addEventListener('pointerdown', e => {
     if(e.pointerType === 'touch') return;
     if(mode === 'move'){ beginPan(e.clientX, e.clientY); return; }
+    if(mode === 'crop') return;
     beginStroke(e.clientX, e.clientY);
   });
   canvas.addEventListener('pointermove', e => {
     if(e.pointerType === 'touch') return;
     if(mode === 'move'){ continuePan(e.clientX, e.clientY); return; }
+    if(mode === 'crop') return;
     continueStroke(e.clientX, e.clientY, true);
   });
   window.addEventListener('pointerup', e => {
@@ -763,46 +878,32 @@
     endStroke();
   });
   canvas.addEventListener('pointerleave', () => { if(mode !== 'move') brushCursor.style.display = 'none'; });
-  canvas.addEventListener('pointerenter', () => { if(hasImage && mode !== 'move') brushCursor.style.display = 'block'; });
+  canvas.addEventListener('pointerenter', () => { if(hasImage && mode !== 'move' && mode !== 'crop') brushCursor.style.display = 'block'; });
 
-  // Touch (phones/tablets) — handled directly via Touch Events instead
-  // of Pointer Events, and always preventDefault to stop the page from
-  // scrolling/zooming while brushing. Two fingers always pinch-zoom
-  // (regardless of mode); one finger draws, or pans in Move mode.
   canvas.addEventListener('touchstart', e => {
     if(!hasImage) return;
     e.preventDefault();
     endStroke(); endPan();
-    if(e.touches.length >= 2){
-      beginPinch(e.touches);
-      return;
-    }
+    if(e.touches.length >= 2){ beginPinch(e.touches); return; }
     const t = e.touches[0];
     if(mode === 'move'){ beginPan(t.clientX, t.clientY); return; }
+    if(mode === 'crop') return;
     beginStroke(t.clientX, t.clientY);
     continueStroke(t.clientX, t.clientY, true);
   }, { passive: false });
   canvas.addEventListener('touchmove', e => {
     if(!hasImage) return;
     e.preventDefault();
-    if(e.touches.length >= 2){
-      continuePinch(e.touches);
-      return;
-    }
+    if(e.touches.length >= 2){ continuePinch(e.touches); return; }
     const t = e.touches[0];
     if(mode === 'move'){ continuePan(t.clientX, t.clientY); return; }
+    if(mode === 'crop') return;
     continueStroke(t.clientX, t.clientY, true);
   }, { passive: false });
   canvas.addEventListener('touchend', e => {
     e.preventDefault();
     if(e.touches.length < 2) pinch = null;
     if(e.touches.length === 0){ endStroke(); endPan(); brushCursor.style.display = 'none'; }
-  }, { passive: false });
-  canvas.addEventListener('touchcancel', e => {
-    e.preventDefault();
-    pinch = null;
-    endStroke(); endPan();
-    brushCursor.style.display = 'none';
   }, { passive: false });
 
   // ---------- History ----------
@@ -831,14 +932,25 @@
   // ---------- Controls ----------
   function setMode(next){
     mode = next;
-    [modeBlurBtn, modeEraseBtn, modeMoveBtn].forEach(b => b.classList.remove('active'));
-    ({blur: modeBlurBtn, erase: modeEraseBtn, move: modeMoveBtn}[mode]).classList.add('active');
-    canvas.style.cursor = mode === 'move' ? 'grab' : 'none';
+    [modeBlurBtn, modeEraseBtn, modeMoveBtn, modeCropBtn].forEach(b => b.classList.remove('active'));
+    ({blur: modeBlurBtn, erase: modeEraseBtn, move: modeMoveBtn, crop: modeCropBtn}[mode]).classList.add('active');
+    
+    canvas.style.cursor = mode === 'move' ? 'grab' : (mode === 'crop' ? 'default' : 'none');
     brushCursor.style.display = 'none';
+
+    if(mode === 'crop') {
+      cropBox.style.display = 'block';
+      cropActions.style.display = 'flex';
+      initCropBox();
+    } else {
+      cropBox.style.display = 'none';
+      cropActions.style.display = 'none';
+    }
   }
   modeBlurBtn.addEventListener('click', () => setMode('blur'));
   modeEraseBtn.addEventListener('click', () => setMode('erase'));
   modeMoveBtn.addEventListener('click', () => setMode('move'));
+  modeCropBtn.addEventListener('click', () => setMode('crop'));
 
   brushSizeInput.addEventListener('input', () => { brushSizeVal.textContent = brushSizeInput.value; });
   blurStrengthInput.addEventListener('input', () => {
@@ -856,6 +968,7 @@
     zoomBar.style.display = 'none';
     exportBtn.disabled = true;
     fileInput.value = '';
+    setMode('blur');
   });
 
   borderThick.addEventListener('input', () => { borderThickVal.textContent = borderThick.value; });
@@ -887,7 +1000,7 @@
     const color = borderColor.value;
     const withShadow = shadowToggle.checked;
 
-    const pad = 24; // room for drop shadow
+    const pad = 24; 
     const outW = W + border * 2;
     const outH = H + border * 2;
     const exp = document.createElement('canvas');
@@ -916,7 +1029,6 @@
     }
     ectx.restore();
 
-    // clip inner image area
     ectx.save();
     if(shape === 'circle'){
       const cx = ox + outW/2, cy = oy + outH/2, r = Math.min(W, H)/2;

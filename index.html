@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
 <link rel="icon" type="image/png" href="icon.png" sizes="275x275">
-  <style>
+<style>
   :root{
     --paper:#EDE4CC;
     --paper-dot:#DCD0AE;
@@ -106,6 +106,7 @@
     box-shadow:var(--shadow);
     padding:20px;
     min-height:420px;
+    max-height:70vh;
     display:flex;
     align-items:center;
     justify-content:center;
@@ -116,6 +117,7 @@
     align-items:flex-start;
     justify-content:flex-start;
   }
+  .dropzone{
     text-align:center;
     padding:40px 20px;
     cursor:pointer;
@@ -139,12 +141,16 @@
     box-shadow:var(--shadow-sm);
     overflow:hidden;
     flex-shrink:0;
+    touch-action:none;
   }
   canvas#work{
     background:#fff;
     touch-action:none;
     cursor:none;
     display:block;
+    -webkit-touch-callout:none;
+    -webkit-user-select:none;
+    user-select:none;
   }
   .brush-cursor{
     position:absolute;
@@ -214,6 +220,10 @@
     border:2px solid var(--line);
   }
   .zoom-bar .zoom-fit:hover{background:var(--teal);color:var(--white);}
+  .zoom-bar .zoom-slider{
+    width:90px;
+    accent-color:var(--pink);
+  }
 
   /* ---- Sidebar ---- */
   .panel{
@@ -258,7 +268,7 @@
     background:var(--pink);
     color:var(--white);
   }
-  .mode-toggle button:first-child{border-right:2px solid var(--line);}
+  .mode-toggle button:not(:last-child){border-right:2px solid var(--line);}
 
   label.field{
     display:block;
@@ -368,6 +378,7 @@
       <div class="stage-empty-hint" id="hint" style="display:none;">drag to paint blur</div>
       <div class="zoom-bar" id="zoomBar" style="display:none;">
         <button type="button" id="zoomOutBtn" title="Zoom out">−</button>
+        <input type="range" id="zoomSlider" class="zoom-slider" min="15" max="400" value="100">
         <span class="zoom-pct" id="zoomPct">100%</span>
         <button type="button" id="zoomInBtn" title="Zoom in">+</button>
         <button type="button" class="zoom-fit" id="zoomFitBtn">Fit</button>
@@ -380,6 +391,7 @@
         <div class="mode-toggle">
           <button id="modeBlur" class="active">Blur</button>
           <button id="modeErase">Restore</button>
+          <button id="modeMove">✋ Move</button>
         </div>
         <label class="field">Brush size <span class="val" id="brushSizeVal">60</span></label>
         <input type="range" id="brushSize" min="10" max="220" value="60">
@@ -426,7 +438,7 @@
   </div>
 
   <!-- <footer>images are processed locally in your browser — nothing is uploaded anywhere</footer> -->
-  <footer>Created by <a href="https://www.instagram.com/molbrikolat/" style="text-decoration: none;" target="_blank" rel="noopener">moul brikolat</a></footer>
+  <footer>Created by <a href="https://www.instagram.com/molbrikolat/" style="text-decoration: none;" target="_blank" rel="noopener">mol brikolat</a></footer>
 </div>
 
 <script>
@@ -444,9 +456,11 @@
   const zoomInBtn = document.getElementById('zoomInBtn');
   const zoomFitBtn = document.getElementById('zoomFitBtn');
   const zoomPctLabel = document.getElementById('zoomPct');
+  const zoomSlider = document.getElementById('zoomSlider');
 
   const modeBlurBtn = document.getElementById('modeBlur');
   const modeEraseBtn = document.getElementById('modeErase');
+  const modeMoveBtn = document.getElementById('modeMove');
   const brushSizeInput = document.getElementById('brushSize');
   const brushSizeVal = document.getElementById('brushSizeVal');
   const blurStrengthInput = document.getElementById('blurStrength');
@@ -480,6 +494,9 @@
   let fitPct = 100;   // zoom % that fits the image inside the stage
   let zoomPct = 100;  // current zoom, as % of the image's real pixel size
   const ZOOM_MIN = 15, ZOOM_MAX = 400;
+  let panning = false;
+  let panStartX = 0, panStartY = 0, panStartScrollLeft = 0, panStartScrollTop = 0;
+  let pinch = null; // {startDist, startZoom}
 
   function offscreen(w, h){
     const c = document.createElement('canvas');
@@ -536,12 +553,14 @@
     canvas.style.width = (W * zoomPct / 100) + 'px';
     canvas.style.height = (H * zoomPct / 100) + 'px';
     zoomPctLabel.textContent = Math.round(zoomPct) + '%';
+    zoomSlider.value = Math.round(zoomPct);
     stage.classList.toggle('zoomed-in', zoomPct > fitPct + 1);
   }
 
   zoomInBtn.addEventListener('click', () => setZoom(zoomPct + 25));
   zoomOutBtn.addEventListener('click', () => setZoom(zoomPct - 25));
   zoomFitBtn.addEventListener('click', () => setZoom(fitPct));
+  zoomSlider.addEventListener('input', () => setZoom(parseFloat(zoomSlider.value)));
 
   // Ctrl/Cmd + scroll wheel to zoom, like most image editors
   stage.addEventListener('wheel', e => {
@@ -551,11 +570,40 @@
   }, { passive: false });
 
   function regenerateBlur(){
-    const strength = parseInt(blurStrengthInput.value, 10);
-    blurCanvas = offscreen(W, H); blurCtx = blurCanvas.getContext('2d');
-    blurCtx.filter = 'blur(' + strength + 'px)';
-    blurCtx.drawImage(baseCanvas, 0, 0);
-    blurCtx.filter = 'none';
+    // Not using ctx.filter = 'blur()' here on purpose: Safari's support
+    // for canvas filters has been inconsistent, and on iPhones it can
+    // silently no-op — the mask/paint pipeline all works, there's just
+    // nothing visibly different to reveal. Repeated half-size downscaling
+    // (like mipmapping) then scaling back up gives a soft, convincing
+    // blur using only drawImage + smoothing, which every browser handles
+    // the same way.
+    const strength = Math.max(1, parseInt(blurStrengthInput.value, 10));
+    const targetW = Math.max(1, Math.round(W / strength));
+    const targetH = Math.max(1, Math.round(H / strength));
+
+    let curCanvas = baseCanvas, curW = W, curH = H;
+    while (curW > targetW * 1.6 && curW > 2 && curH > 2) {
+      const nw = Math.max(targetW, Math.round(curW / 2));
+      const nh = Math.max(targetH, Math.round(curH / 2));
+      const step = offscreen(nw, nh);
+      const sctx = step.getContext('2d');
+      sctx.imageSmoothingEnabled = true;
+      sctx.imageSmoothingQuality = 'high';
+      sctx.drawImage(curCanvas, 0, 0, nw, nh);
+      curCanvas = step; curW = nw; curH = nh;
+    }
+
+    const small = offscreen(targetW, targetH);
+    const smallCtx = small.getContext('2d');
+    smallCtx.imageSmoothingEnabled = true;
+    smallCtx.imageSmoothingQuality = 'high';
+    smallCtx.drawImage(curCanvas, 0, 0, targetW, targetH);
+
+    blurCanvas = offscreen(W, H);
+    blurCtx = blurCanvas.getContext('2d');
+    blurCtx.imageSmoothingEnabled = true;
+    blurCtx.imageSmoothingQuality = 'high';
+    blurCtx.drawImage(small, 0, 0, W, H);
   }
 
   // ---------- Rendering ----------
@@ -617,7 +665,7 @@
     requestRender();
   }
 
-  function paintCoords(e){
+  function paintCoords(clientX, clientY){
     // clientX/clientY + getBoundingClientRect work reliably for both
     // mouse and touch across all browsers (offsetX/offsetY are not
     // consistently reported on touch-originated pointer events on some
@@ -626,40 +674,136 @@
     const rect = canvas.getBoundingClientRect();
     const scaleX = W / rect.width;
     const scaleY = H / rect.height;
-    return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY, rect };
+    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY, rect };
   }
 
-  function updateCursor(e, rect){
+  function updateCursor(clientX, clientY, rect){
     rect = rect || canvas.getBoundingClientRect();
     const size = parseInt(brushSizeInput.value, 10);
     const scaleDisp = rect.width / W;
     brushCursor.style.width = (size * scaleDisp) + 'px';
     brushCursor.style.height = (size * scaleDisp) + 'px';
-    brushCursor.style.left = (e.clientX - rect.left) + 'px';
-    brushCursor.style.top = (e.clientY - rect.top) + 'px';
+    brushCursor.style.left = (clientX - rect.left) + 'px';
+    brushCursor.style.top = (clientY - rect.top) + 'px';
     brushCursor.classList.toggle('erase', mode === 'erase');
   }
 
-  canvas.addEventListener('pointerdown', e => {
+  function beginStroke(clientX, clientY){
     if(!hasImage) return;
-    canvas.setPointerCapture(e.pointerId);
     drawing = true;
     lastX = null; lastY = null;
-    const {x, y} = paintCoords(e);
+    const {x, y} = paintCoords(clientX, clientY);
     strokeTo(x, y);
-  });
-  canvas.addEventListener('pointermove', e => {
-    const {x, y, rect} = paintCoords(e);
-    brushCursor.style.display = 'block';
-    updateCursor(e, rect);
+  }
+  function continueStroke(clientX, clientY, showCursor){
+    const {x, y, rect} = paintCoords(clientX, clientY);
+    if(showCursor){
+      brushCursor.style.display = 'block';
+      updateCursor(clientX, clientY, rect);
+    }
     if(!drawing) return;
     strokeTo(x, y);
+  }
+  function endStroke(){
+    if(drawing){ drawing = false; lastX = null; lastY = null; saveHistory(); }
+  }
+
+  function beginPan(clientX, clientY){
+    panning = true;
+    panStartX = clientX; panStartY = clientY;
+    panStartScrollLeft = stage.scrollLeft; panStartScrollTop = stage.scrollTop;
+    canvas.style.cursor = 'grabbing';
+  }
+  function continuePan(clientX, clientY){
+    if(!panning) return;
+    stage.scrollLeft = panStartScrollLeft - (clientX - panStartX);
+    stage.scrollTop = panStartScrollTop - (clientY - panStartY);
+  }
+  function endPan(){
+    panning = false;
+    if(hasImage && mode === 'move') canvas.style.cursor = 'grab';
+  }
+
+  function pinchDist(touches){ return Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY); }
+  function pinchMid(touches){ return { x: (touches[0].clientX + touches[1].clientX) / 2, y: (touches[0].clientY + touches[1].clientY) / 2 }; }
+
+  function beginPinch(touches){
+    pinch = { startDist: Math.max(1, pinchDist(touches)), startZoom: zoomPct };
+  }
+  function continuePinch(touches){
+    if(!pinch) return;
+    const rectBefore = canvas.getBoundingClientRect();
+    const m = pinchMid(touches);
+    const fx = (m.x - rectBefore.left) / rectBefore.width;
+    const fy = (m.y - rectBefore.top) / rectBefore.height;
+    const oldW = rectBefore.width, oldH = rectBefore.height;
+    const newZoom = pinch.startZoom * (pinchDist(touches) / pinch.startDist);
+    setZoom(newZoom);
+    const rectAfter = canvas.getBoundingClientRect();
+    stage.scrollLeft += (rectAfter.width - oldW) * fx;
+    stage.scrollTop += (rectAfter.height - oldH) * fy;
+  }
+
+  // Mouse / pen via Pointer Events (skip 'touch' pointerType — handled
+  // below by dedicated touch listeners, which are far more reliably
+  // supported for touch on mobile browsers).
+  canvas.addEventListener('pointerdown', e => {
+    if(e.pointerType === 'touch') return;
+    if(mode === 'move'){ beginPan(e.clientX, e.clientY); return; }
+    beginStroke(e.clientX, e.clientY);
+  });
+  canvas.addEventListener('pointermove', e => {
+    if(e.pointerType === 'touch') return;
+    if(mode === 'move'){ continuePan(e.clientX, e.clientY); return; }
+    continueStroke(e.clientX, e.clientY, true);
   });
   window.addEventListener('pointerup', e => {
-    if(drawing){ drawing = false; lastX = null; lastY = null; saveHistory(); }
+    if(e.pointerType === 'touch') return;
+    if(mode === 'move'){ endPan(); return; }
+    endStroke();
   });
-  canvas.addEventListener('pointerleave', () => { brushCursor.style.display = 'none'; });
-  canvas.addEventListener('pointerenter', () => { if(hasImage) brushCursor.style.display = 'block'; });
+  canvas.addEventListener('pointerleave', () => { if(mode !== 'move') brushCursor.style.display = 'none'; });
+  canvas.addEventListener('pointerenter', () => { if(hasImage && mode !== 'move') brushCursor.style.display = 'block'; });
+
+  // Touch (phones/tablets) — handled directly via Touch Events instead
+  // of Pointer Events, and always preventDefault to stop the page from
+  // scrolling/zooming while brushing. Two fingers always pinch-zoom
+  // (regardless of mode); one finger draws, or pans in Move mode.
+  canvas.addEventListener('touchstart', e => {
+    if(!hasImage) return;
+    e.preventDefault();
+    endStroke(); endPan();
+    if(e.touches.length >= 2){
+      beginPinch(e.touches);
+      return;
+    }
+    const t = e.touches[0];
+    if(mode === 'move'){ beginPan(t.clientX, t.clientY); return; }
+    beginStroke(t.clientX, t.clientY);
+    continueStroke(t.clientX, t.clientY, true);
+  }, { passive: false });
+  canvas.addEventListener('touchmove', e => {
+    if(!hasImage) return;
+    e.preventDefault();
+    if(e.touches.length >= 2){
+      continuePinch(e.touches);
+      return;
+    }
+    const t = e.touches[0];
+    if(mode === 'move'){ continuePan(t.clientX, t.clientY); return; }
+    continueStroke(t.clientX, t.clientY, true);
+  }, { passive: false });
+  canvas.addEventListener('touchend', e => {
+    e.preventDefault();
+    if(e.touches.length < 2) pinch = null;
+    if(e.touches.length === 0){ endStroke(); endPan(); brushCursor.style.display = 'none'; }
+  }, { passive: false });
+  canvas.addEventListener('touchcancel', e => {
+    e.preventDefault();
+    pinch = null;
+    endStroke(); endPan();
+    brushCursor.style.display = 'none';
+  }, { passive: false });
 
   // ---------- History ----------
   function saveHistory(){
@@ -685,8 +829,16 @@
   }
 
   // ---------- Controls ----------
-  modeBlurBtn.addEventListener('click', () => { mode='blur'; modeBlurBtn.classList.add('active'); modeEraseBtn.classList.remove('active'); });
-  modeEraseBtn.addEventListener('click', () => { mode='erase'; modeEraseBtn.classList.add('active'); modeBlurBtn.classList.remove('active'); });
+  function setMode(next){
+    mode = next;
+    [modeBlurBtn, modeEraseBtn, modeMoveBtn].forEach(b => b.classList.remove('active'));
+    ({blur: modeBlurBtn, erase: modeEraseBtn, move: modeMoveBtn}[mode]).classList.add('active');
+    canvas.style.cursor = mode === 'move' ? 'grab' : 'none';
+    brushCursor.style.display = 'none';
+  }
+  modeBlurBtn.addEventListener('click', () => setMode('blur'));
+  modeEraseBtn.addEventListener('click', () => setMode('erase'));
+  modeMoveBtn.addEventListener('click', () => setMode('move'));
 
   brushSizeInput.addEventListener('input', () => { brushSizeVal.textContent = brushSizeInput.value; });
   blurStrengthInput.addEventListener('input', () => {

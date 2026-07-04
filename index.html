@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Blur Studio — brush, blur, sticker-ify</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="icon.png" sizes="275x275">
+<style>
+  :root{
+    --paper:#EDE4CC;
+    --paper-dot:#DCD0AE;
+    --ink:#241F16;
+    --pink:#FF5A7A;
+    --pink-dark:#E23F60;
+    --teal:#1FAE9F;
+    --white:#FFFDF8;
+    --line:#241F16;
+    --shadow: 6px 6px 0 var(--line);
+    --shadow-sm: 3px 3px 0 var(--line);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      radial-gradient(circle, var(--paper-dot) 1.4px, transparent 1.4px) 0 0/22px 22px,
+      var(--paper);
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    min-height:100vh;
+  }
+  .wrap{
+    max-width:1240px;
+    margin:0 auto;
+    padding:28px 20px 60px;
+  }
+  header{
+    display:flex;
+    align-items:flex-end;
+    justify-content:space-between;
+    flex-wrap:wrap;
+    gap:14px;
+    margin-bottom:26px;
+  }
+  .brand{
+    display:flex;
+    align-items:center;
+    gap:12px;
+  }
+  .brand-mark{
+    width:44px;height:44px;
+    background:var(--pink);
+    border:3px solid var(--line);
+    border-radius:14px 6px 14px 6px;
+    box-shadow:var(--shadow-sm);
+    display:flex;align-items:center;justify-content:center;
+    font-family:'Fredoka',sans-serif;
+    font-size:22px;
+    transform:rotate(-6deg);
+    flex-shrink:0;
+  }
+  h1{
+    font-family:'Fredoka',sans-serif;
+    font-size:30px;
+    font-weight:700;
+    margin:0;
+    letter-spacing:-0.01em;
+  }
+  header p{
+    margin:2px 0 0;
+    font-size:14px;
+    color:#5b5343;
+    max-width:38ch;
+  }
+  .eyebrow{
+    font-family:'JetBrains Mono',monospace;
+    font-size:11px;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    background:var(--white);
+    border:2px solid var(--line);
+    border-radius:100px;
+    padding:6px 12px;
+    box-shadow:var(--shadow-sm);
+  }
+
+  .layout{
+    display:grid;
+    grid-template-columns:1fr 300px;
+    gap:22px;
+    align-items:start;
+  }
+  @media (max-width:880px){
+    .layout{grid-template-columns:1fr;}
+  }
+
+  /* ---- Canvas stage ---- */
+  .stage{
+    background:
+      linear-gradient(var(--paper-dot) 1px, transparent 1px) 0 0/28px 28px,
+      linear-gradient(90deg, var(--paper-dot) 1px, transparent 1px) 0 0/28px 28px,
+      #F6F0DE;
+    border:3px solid var(--line);
+    border-radius:20px;
+    box-shadow:var(--shadow);
+    padding:20px;
+    min-height:420px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    position:relative;
+    overflow:auto;
+  }
+  .stage.zoomed-in{
+    align-items:flex-start;
+    justify-content:flex-start;
+  }
+    text-align:center;
+    padding:40px 20px;
+    cursor:pointer;
+    border:3px dashed #9c927a;
+    border-radius:16px;
+    width:100%;
+    max-width:420px;
+  }
+  .dropzone:hover{border-color:var(--pink);}
+  .dropzone .icon{font-size:38px;display:block;margin-bottom:10px;}
+  .dropzone strong{font-family:'Fredoka',sans-serif;font-size:18px;}
+  .dropzone span{display:block;font-size:13px;color:#6b624c;margin-top:6px;}
+  input[type=file]{display:none;}
+
+  .canvas-holder{
+    position:relative;
+    display:inline-block;
+    line-height:0;
+    border:3px solid var(--line);
+    border-radius:10px;
+    box-shadow:var(--shadow-sm);
+    overflow:hidden;
+    flex-shrink:0;
+  }
+  canvas#work{
+    background:#fff;
+    touch-action:none;
+    cursor:none;
+    display:block;
+  }
+  .brush-cursor{
+    position:absolute;
+    pointer-events:none;
+    border-radius:50%;
+    border:2px solid var(--ink);
+    background:rgba(255,90,122,0.18);
+    transform:translate(-50%,-50%);
+    display:none;
+  }
+  .brush-cursor.erase{
+    background:rgba(31,174,159,0.18);
+  }
+
+  .stage-empty-hint{
+    position:absolute;
+    top:14px; left:18px;
+    font-family:'JetBrains Mono',monospace;
+    font-size:11px;
+    color:#8a8064;
+  }
+
+  .zoom-bar{
+    position:absolute;
+    bottom:14px;
+    left:50%;
+    transform:translateX(-50%);
+    display:flex;
+    align-items:center;
+    gap:6px;
+    background:var(--white);
+    border:2px solid var(--line);
+    border-radius:100px;
+    box-shadow:var(--shadow-sm);
+    padding:6px 10px;
+    z-index:5;
+  }
+  .zoom-bar button{
+    width:26px;height:26px;
+    border:2px solid var(--line);
+    border-radius:50%;
+    background:var(--white);
+    font-family:'Fredoka',sans-serif;
+    font-size:15px;
+    line-height:1;
+    cursor:pointer;
+    display:flex;align-items:center;justify-content:center;
+    padding:0;
+  }
+  .zoom-bar button:hover{background:var(--pink);color:var(--white);}
+  .zoom-bar .zoom-pct{
+    font-family:'JetBrains Mono',monospace;
+    font-size:12px;
+    min-width:44px;
+    text-align:center;
+  }
+  .zoom-bar .zoom-fit{
+    font-family:'Inter',sans-serif;
+    font-weight:600;
+    font-size:11px;
+    border:none;
+    border-radius:100px;
+    width:auto;
+    padding:0 10px;
+    height:26px;
+    background:var(--paper);
+    border:2px solid var(--line);
+  }
+  .zoom-bar .zoom-fit:hover{background:var(--teal);color:var(--white);}
+
+  /* ---- Sidebar ---- */
+  .panel{
+    background:var(--white);
+    border:3px solid var(--line);
+    border-radius:16px;
+    box-shadow:var(--shadow-sm);
+    padding:18px;
+    margin-bottom:18px;
+  }
+  .panel h2{
+    font-family:'Fredoka',sans-serif;
+    font-size:15px;
+    margin:0 0 12px;
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
+  .panel h2 .dot{
+    width:9px;height:9px;border-radius:50%;background:var(--pink);
+  }
+
+  .mode-toggle{
+    display:flex;
+    border:2px solid var(--line);
+    border-radius:10px;
+    overflow:hidden;
+    margin-bottom:14px;
+  }
+  .mode-toggle button{
+    flex:1;
+    border:none;
+    background:var(--white);
+    font-family:'Inter',sans-serif;
+    font-weight:600;
+    font-size:13px;
+    padding:9px 6px;
+    cursor:pointer;
+    color:var(--ink);
+  }
+  .mode-toggle button.active{
+    background:var(--pink);
+    color:var(--white);
+  }
+  .mode-toggle button:first-child{border-right:2px solid var(--line);}
+
+  label.field{
+    display:block;
+    font-size:12px;
+    font-weight:600;
+    margin:12px 0 6px;
+    display:flex;
+    justify-content:space-between;
+  }
+  label.field span.val{
+    font-family:'JetBrains Mono',monospace;
+    color:var(--pink-dark);
+    font-weight:500;
+  }
+  input[type=range]{
+    width:100%;
+    accent-color:var(--pink);
+  }
+  select, input[type=color]{
+    width:100%;
+    border:2px solid var(--line);
+    border-radius:8px;
+    padding:7px;
+    font-family:'Inter',sans-serif;
+    font-size:13px;
+    background:var(--white);
+  }
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+
+  .btn{
+    display:block;
+    width:100%;
+    text-align:center;
+    font-family:'Fredoka',sans-serif;
+    font-weight:600;
+    font-size:14px;
+    padding:11px 14px;
+    border:2px solid var(--line);
+    border-radius:10px;
+    background:var(--white);
+    box-shadow:3px 3px 0 var(--line);
+    cursor:pointer;
+    transition:transform .05s ease;
+    margin-top:8px;
+  }
+  .btn:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--line);}
+  .btn.primary{background:var(--pink);color:var(--white);}
+  .btn.teal{background:var(--teal);color:var(--white);}
+  .btn.ghost{background:var(--white);}
+  .btn:disabled{opacity:.4;cursor:not-allowed;}
+
+  .toggle-row{
+    display:flex;align-items:center;justify-content:space-between;
+    margin-top:10px;
+    font-size:13px;font-weight:600;
+  }
+  .switch{
+    position:relative;width:38px;height:22px;flex-shrink:0;
+  }
+  .switch input{opacity:0;width:0;height:0;}
+  .slider-toggle{
+    position:absolute;inset:0;background:#d8cfb4;border:2px solid var(--line);
+    border-radius:100px;cursor:pointer;transition:.15s;
+  }
+  .slider-toggle:before{
+    content:"";position:absolute;width:14px;height:14px;left:2px;top:2px;
+    background:var(--white);border:2px solid var(--line);border-radius:50%;transition:.15s;
+  }
+  .switch input:checked + .slider-toggle{background:var(--teal);}
+  .switch input:checked + .slider-toggle:before{transform:translateX(15px);}
+
+  footer{
+    text-align:center;
+    margin-top:30px;
+    font-family:'JetBrains Mono',monospace;
+    /*font-size:11px;*/
+    font-size:16px;
+    color:#8a8064;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="brand-mark">✂️</div>
+      <div>
+        <h1>Blur Studio</h1>
+        <p>Brush blur onto any part of a photo, then peel it off as a sticker.</p>
+      </div>
+    </div>
+    <div class="eyebrow">no upload · runs in your browser</div>
+  </header>
+
+  <div class="layout">
+    <div class="stage" id="stage">
+      <div class="dropzone" id="dropzone">
+        <span class="icon">🖼️</span>
+        <strong>Drop a photo here</strong>
+        <span>or click to choose a file — JPG, PNG, WebP</span>
+        <input type="file" id="fileInput" accept="image/*">
+      </div>
+      <div class="canvas-holder" id="canvasHolder" style="display:none;">
+        <canvas id="work"></canvas>
+        <div class="brush-cursor" id="brushCursor"></div>
+      </div>
+      <div class="stage-empty-hint" id="hint" style="display:none;">drag to paint blur</div>
+      <div class="zoom-bar" id="zoomBar" style="display:none;">
+        <button type="button" id="zoomOutBtn" title="Zoom out">−</button>
+        <span class="zoom-pct" id="zoomPct">100%</span>
+        <button type="button" id="zoomInBtn" title="Zoom in">+</button>
+        <button type="button" class="zoom-fit" id="zoomFitBtn">Fit</button>
+      </div>
+    </div>
+
+    <div class="sidebar">
+      <div class="panel">
+        <h2><span class="dot"></span>Brush</h2>
+        <div class="mode-toggle">
+          <button id="modeBlur" class="active">Blur</button>
+          <button id="modeErase">Restore</button>
+        </div>
+        <label class="field">Brush size <span class="val" id="brushSizeVal">60</span></label>
+        <input type="range" id="brushSize" min="10" max="220" value="60">
+        <label class="field">Blur strength <span class="val" id="blurStrengthVal">18</span></label>
+        <input type="range" id="blurStrength" min="2" max="60" value="18">
+        <div class="row2">
+          <button class="btn ghost" id="undoBtn">↩ Undo</button>
+          <button class="btn ghost" id="clearBtn">✕ Clear blur</button>
+        </div>
+        <button class="btn ghost" id="newImageBtn">🔄 New image</button>
+      </div>
+
+      <div class="panel">
+        <h2><span class="dot" style="background:var(--teal)"></span>Sticker border</h2>
+        <div class="toggle-row">
+          Add die-cut border
+          <label class="switch">
+            <input type="checkbox" id="borderToggle" checked>
+            <span class="slider-toggle"></span>
+          </label>
+        </div>
+        <label class="field">Shape</label>
+        <select id="shapeSelect">
+          <option value="rounded">Rounded rectangle</option>
+          <option value="circle">Circle</option>
+          <option value="square">Square corners</option>
+        </select>
+        <label class="field">Border thickness <span class="val" id="borderThickVal">16</span></label>
+        <input type="range" id="borderThick" min="0" max="60" value="16">
+        <label class="field">Corner roundness <span class="val" id="cornerVal">36</span></label>
+        <input type="range" id="cornerRadius" min="0" max="120" value="36">
+        <label class="field">Border color</label>
+        <input type="color" id="borderColor" value="#fffdf8">
+        <div class="toggle-row">
+          Drop shadow
+          <label class="switch">
+            <input type="checkbox" id="shadowToggle" checked>
+            <span class="slider-toggle"></span>
+          </label>
+        </div>
+        <button class="btn primary" id="exportBtn" disabled>⬇ Export sticker PNG</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- <footer>images are processed locally in your browser — nothing is uploaded anywhere</footer> -->
+  <footer>Created by <a href="https://www.instagram.com/molbrikolat/" style="text-decoration: none;" target="_blank" rel="noopener">moul brikolat</a></footer>
+</div>
+
+<script>
+(function(){
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('fileInput');
+  const stage = document.getElementById('stage');
+  const canvasHolder = document.getElementById('canvasHolder');
+  const hint = document.getElementById('hint');
+  const canvas = document.getElementById('work');
+  const ctx = canvas.getContext('2d');
+  const brushCursor = document.getElementById('brushCursor');
+  const zoomBar = document.getElementById('zoomBar');
+  const zoomOutBtn = document.getElementById('zoomOutBtn');
+  const zoomInBtn = document.getElementById('zoomInBtn');
+  const zoomFitBtn = document.getElementById('zoomFitBtn');
+  const zoomPctLabel = document.getElementById('zoomPct');
+
+  const modeBlurBtn = document.getElementById('modeBlur');
+  const modeEraseBtn = document.getElementById('modeErase');
+  const brushSizeInput = document.getElementById('brushSize');
+  const brushSizeVal = document.getElementById('brushSizeVal');
+  const blurStrengthInput = document.getElementById('blurStrength');
+  const blurStrengthVal = document.getElementById('blurStrengthVal');
+  const undoBtn = document.getElementById('undoBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const newImageBtn = document.getElementById('newImageBtn');
+  const exportBtn = document.getElementById('exportBtn');
+
+  const borderToggle = document.getElementById('borderToggle');
+  const shapeSelect = document.getElementById('shapeSelect');
+  const borderThick = document.getElementById('borderThick');
+  const borderThickVal = document.getElementById('borderThickVal');
+  const cornerRadius = document.getElementById('cornerRadius');
+  const cornerVal = document.getElementById('cornerVal');
+  const borderColor = document.getElementById('borderColor');
+  const shadowToggle = document.getElementById('shadowToggle');
+
+  const MAX_DIM = 1400;
+
+  let baseCanvas, baseCtx;
+  let blurCanvas, blurCtx;
+  let maskCanvas, maskCtx;
+  let W = 0, H = 0;
+  let mode = 'blur';
+  let drawing = false;
+  let lastX = null, lastY = null;
+  let history = [];
+  let hasImage = false;
+  let needsRender = false;
+  let fitPct = 100;   // zoom % that fits the image inside the stage
+  let zoomPct = 100;  // current zoom, as % of the image's real pixel size
+  const ZOOM_MIN = 15, ZOOM_MAX = 400;
+
+  function offscreen(w, h){
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    return c;
+  }
+
+  // ---------- Load image ----------
+  function handleFile(file){
+    if(!file || !file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => setupImage(img);
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function setupImage(img){
+    let w = img.naturalWidth, h = img.naturalHeight;
+    const scale = Math.min(1, MAX_DIM / Math.max(w, h));
+    W = Math.round(w * scale);
+    H = Math.round(h * scale);
+
+    canvas.width = W; canvas.height = H;
+
+    baseCanvas = offscreen(W, H); baseCtx = baseCanvas.getContext('2d');
+    baseCtx.drawImage(img, 0, 0, W, H);
+
+    maskCanvas = offscreen(W, H); maskCtx = maskCanvas.getContext('2d');
+
+    regenerateBlur();
+    history = [];
+    saveHistory();
+    render();
+
+    dropzone.style.display = 'none';
+    canvasHolder.style.display = 'inline-block';
+    hint.style.display = 'block';
+    zoomBar.style.display = 'flex';
+    exportBtn.disabled = false;
+    hasImage = true;
+
+    // pick a starting zoom that fits the image inside the visible stage
+    const availW = Math.max(120, stage.clientWidth - 40);
+    const availH = Math.max(120, window.innerHeight * 0.6);
+    fitPct = Math.min(100, (availW / W) * 100, (availH / H) * 100);
+    setZoom(fitPct);
+  }
+
+  function setZoom(pct){
+    zoomPct = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, pct));
+    canvas.style.width = (W * zoomPct / 100) + 'px';
+    canvas.style.height = (H * zoomPct / 100) + 'px';
+    zoomPctLabel.textContent = Math.round(zoomPct) + '%';
+    stage.classList.toggle('zoomed-in', zoomPct > fitPct + 1);
+  }
+
+  zoomInBtn.addEventListener('click', () => setZoom(zoomPct + 25));
+  zoomOutBtn.addEventListener('click', () => setZoom(zoomPct - 25));
+  zoomFitBtn.addEventListener('click', () => setZoom(fitPct));
+
+  // Ctrl/Cmd + scroll wheel to zoom, like most image editors
+  stage.addEventListener('wheel', e => {
+    if(!hasImage || !(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    setZoom(zoomPct + (e.deltaY < 0 ? 15 : -15));
+  }, { passive: false });
+
+  function regenerateBlur(){
+    const strength = parseInt(blurStrengthInput.value, 10);
+    blurCanvas = offscreen(W, H); blurCtx = blurCanvas.getContext('2d');
+    blurCtx.filter = 'blur(' + strength + 'px)';
+    blurCtx.drawImage(baseCanvas, 0, 0);
+    blurCtx.filter = 'none';
+  }
+
+  // ---------- Rendering ----------
+  function render(){
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(baseCanvas, 0, 0);
+    const tmp = offscreen(W, H);
+    const tctx = tmp.getContext('2d');
+    tctx.drawImage(blurCanvas, 0, 0);
+    tctx.globalCompositeOperation = 'destination-in';
+    tctx.drawImage(maskCanvas, 0, 0);
+    ctx.drawImage(tmp, 0, 0);
+  }
+
+  function requestRender(){
+    if(needsRender) return;
+    needsRender = true;
+    requestAnimationFrame(() => { render(); needsRender = false; });
+  }
+
+  // ---------- Brush painting ----------
+  function stampAt(x, y, radius){
+    maskCtx.save();
+    if(mode === 'blur'){
+      maskCtx.globalCompositeOperation = 'source-over';
+      const g = maskCtx.createRadialGradient(x, y, 0, x, y, radius);
+      g.addColorStop(0, 'rgba(255,255,255,0.55)');
+      g.addColorStop(0.7, 'rgba(255,255,255,0.4)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      maskCtx.fillStyle = g;
+    } else {
+      maskCtx.globalCompositeOperation = 'destination-out';
+      const g = maskCtx.createRadialGradient(x, y, 0, x, y, radius);
+      g.addColorStop(0, 'rgba(255,255,255,0.6)');
+      g.addColorStop(0.7, 'rgba(255,255,255,0.45)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      maskCtx.fillStyle = g;
+    }
+    maskCtx.beginPath();
+    maskCtx.arc(x, y, radius, 0, Math.PI * 2);
+    maskCtx.fill();
+    maskCtx.restore();
+  }
+
+  function strokeTo(x, y){
+    const radius = parseInt(brushSizeInput.value, 10) / 2;
+    if(lastX === null){
+      stampAt(x, y, radius);
+    } else {
+      const dist = Math.hypot(x - lastX, y - lastY);
+      const step = Math.max(2, radius / 4);
+      const steps = Math.max(1, Math.floor(dist / step));
+      for(let i = 1; i <= steps; i++){
+        const t = i / steps;
+        stampAt(lastX + (x - lastX) * t, lastY + (y - lastY) * t, radius);
+      }
+    }
+    lastX = x; lastY = y;
+    requestRender();
+  }
+
+  function paintCoords(e){
+    // offsetX/offsetY are already relative to the canvas's own content
+    // box (border excluded), so this sidesteps any rect/border math.
+    const scaleX = W / canvas.clientWidth;
+    const scaleY = H / canvas.clientHeight;
+    return { x: e.offsetX * scaleX, y: e.offsetY * scaleY };
+  }
+
+  function updateCursor(e){
+    const size = parseInt(brushSizeInput.value, 10);
+    const scaleDisp = canvas.clientWidth / W;
+    brushCursor.style.width = (size * scaleDisp) + 'px';
+    brushCursor.style.height = (size * scaleDisp) + 'px';
+    brushCursor.style.left = e.offsetX + 'px';
+    brushCursor.style.top = e.offsetY + 'px';
+    brushCursor.classList.toggle('erase', mode === 'erase');
+  }
+
+  canvas.addEventListener('pointerdown', e => {
+    if(!hasImage) return;
+    canvas.setPointerCapture(e.pointerId);
+    drawing = true;
+    lastX = null; lastY = null;
+    const {x, y} = paintCoords(e);
+    strokeTo(x, y);
+  });
+  canvas.addEventListener('pointermove', e => {
+    const {x, y} = paintCoords(e);
+    brushCursor.style.display = 'block';
+    updateCursor(e);
+    if(!drawing) return;
+    strokeTo(x, y);
+  });
+  window.addEventListener('pointerup', e => {
+    if(drawing){ drawing = false; lastX = null; lastY = null; saveHistory(); }
+  });
+  canvas.addEventListener('pointerleave', () => { brushCursor.style.display = 'none'; });
+  canvas.addEventListener('pointerenter', () => { if(hasImage) brushCursor.style.display = 'block'; });
+
+  // ---------- History ----------
+  function saveHistory(){
+    if(!maskCanvas) return;
+    const snap = document.createElement('canvas');
+    snap.width = W; snap.height = H;
+    snap.getContext('2d').drawImage(maskCanvas, 0, 0);
+    history.push(snap);
+    if(history.length > 25) history.shift();
+  }
+  function undo(){
+    if(history.length <= 1) return;
+    history.pop();
+    const prev = history[history.length - 1];
+    maskCtx.clearRect(0, 0, W, H);
+    maskCtx.drawImage(prev, 0, 0);
+    render();
+  }
+  function clearBlur(){
+    maskCtx.clearRect(0, 0, W, H);
+    render();
+    saveHistory();
+  }
+
+  // ---------- Controls ----------
+  modeBlurBtn.addEventListener('click', () => { mode='blur'; modeBlurBtn.classList.add('active'); modeEraseBtn.classList.remove('active'); });
+  modeEraseBtn.addEventListener('click', () => { mode='erase'; modeEraseBtn.classList.add('active'); modeBlurBtn.classList.remove('active'); });
+
+  brushSizeInput.addEventListener('input', () => { brushSizeVal.textContent = brushSizeInput.value; });
+  blurStrengthInput.addEventListener('input', () => {
+    blurStrengthVal.textContent = blurStrengthInput.value;
+    if(hasImage){ regenerateBlur(); render(); }
+  });
+
+  undoBtn.addEventListener('click', undo);
+  clearBtn.addEventListener('click', clearBlur);
+  newImageBtn.addEventListener('click', () => {
+    hasImage = false;
+    dropzone.style.display = 'block';
+    canvasHolder.style.display = 'none';
+    hint.style.display = 'none';
+    zoomBar.style.display = 'none';
+    exportBtn.disabled = true;
+    fileInput.value = '';
+  });
+
+  borderThick.addEventListener('input', () => { borderThickVal.textContent = borderThick.value; });
+  cornerRadius.addEventListener('input', () => { cornerVal.textContent = cornerRadius.value; });
+
+  // ---------- Upload wiring ----------
+  dropzone.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
+  ['dragenter','dragover'].forEach(evt => dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.style.borderColor = 'var(--pink)'; }));
+  ['dragleave','drop'].forEach(evt => dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.style.borderColor = '#9c927a'; }));
+  dropzone.addEventListener('drop', e => { handleFile(e.dataTransfer.files[0]); });
+
+  // ---------- Export ----------
+  function roundedRectPath(c, x, y, w, h, r){
+    r = Math.min(r, w/2, h/2);
+    c.beginPath();
+    c.moveTo(x+r, y);
+    c.arcTo(x+w, y, x+w, y+h, r);
+    c.arcTo(x+w, y+h, x, y+h, r);
+    c.arcTo(x, y+h, x, y, r);
+    c.arcTo(x, y, x+w, y, r);
+    c.closePath();
+  }
+
+  function exportSticker(){
+    const border = borderToggle.checked ? parseInt(borderThick.value, 10) : 0;
+    const shape = shapeSelect.value;
+    const radiusRaw = parseInt(cornerRadius.value, 10);
+    const color = borderColor.value;
+    const withShadow = shadowToggle.checked;
+
+    const pad = 24; // room for drop shadow
+    const outW = W + border * 2;
+    const outH = H + border * 2;
+    const exp = document.createElement('canvas');
+    exp.width = outW + pad * 2;
+    exp.height = outH + pad * 2;
+    const ectx = exp.getContext('2d');
+
+    ectx.save();
+    if(withShadow){
+      ectx.shadowColor = 'rgba(0,0,0,0.35)';
+      ectx.shadowBlur = 22;
+      ectx.shadowOffsetY = 10;
+    }
+
+    ectx.fillStyle = color;
+    const ox = pad, oy = pad;
+    if(shape === 'circle'){
+      const cx = ox + outW/2, cy = oy + outH/2, r = Math.min(outW, outH)/2;
+      ectx.beginPath();
+      ectx.arc(cx, cy, r, 0, Math.PI*2);
+      ectx.fill();
+    } else {
+      const r = shape === 'square' ? 0 : radiusRaw;
+      roundedRectPath(ectx, ox, oy, outW, outH, r);
+      ectx.fill();
+    }
+    ectx.restore();
+
+    // clip inner image area
+    ectx.save();
+    if(shape === 'circle'){
+      const cx = ox + outW/2, cy = oy + outH/2, r = Math.min(W, H)/2;
+      ectx.beginPath();
+      ectx.arc(cx, cy, r, 0, Math.PI*2);
+      ectx.clip();
+    } else {
+      const r = shape === 'square' ? 0 : Math.max(0, radiusRaw - border*0.4);
+      roundedRectPath(ectx, ox + border, oy + border, W, H, r);
+      ectx.clip();
+    }
+    ectx.drawImage(canvas, ox + border, oy + border, W, H);
+    ectx.restore();
+
+    exp.toBlob(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'sticker.png';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }, 'image/png');
+  }
+
+  exportBtn.addEventListener('click', exportSticker);
+})();
+</script>
+</body>
+</html>

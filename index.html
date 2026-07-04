@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
 <link rel="icon" type="image/png" href="icon.png" sizes="275x275">
-<style>
+  <style>
   :root{
     --paper:#EDE4CC;
     --paper-dot:#DCD0AE;
@@ -426,7 +426,7 @@
   </div>
 
   <!-- <footer>images are processed locally in your browser — nothing is uploaded anywhere</footer> -->
-  <footer>Created by <a href="https://www.instagram.com/molbrikolat/" style="text-decoration: none;" target="_blank" rel="noopener">mol brikolat</a></footer>
+  <footer>Created by <a href="https://www.instagram.com/molbrikolat/" style="text-decoration: none;" target="_blank" rel="noopener">moul brikolat</a></footer>
 </div>
 
 <script>
@@ -618,20 +618,25 @@
   }
 
   function paintCoords(e){
-    // offsetX/offsetY are already relative to the canvas's own content
-    // box (border excluded), so this sidesteps any rect/border math.
-    const scaleX = W / canvas.clientWidth;
-    const scaleY = H / canvas.clientHeight;
-    return { x: e.offsetX * scaleX, y: e.offsetY * scaleY };
+    // clientX/clientY + getBoundingClientRect work reliably for both
+    // mouse and touch across all browsers (offsetX/offsetY are not
+    // consistently reported on touch-originated pointer events on some
+    // mobile browsers, which broke brushing on phones). The canvas has
+    // no border of its own (it's on the wrapper), so rect == content box.
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const scaleY = H / rect.height;
+    return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY, rect };
   }
 
-  function updateCursor(e){
+  function updateCursor(e, rect){
+    rect = rect || canvas.getBoundingClientRect();
     const size = parseInt(brushSizeInput.value, 10);
-    const scaleDisp = canvas.clientWidth / W;
+    const scaleDisp = rect.width / W;
     brushCursor.style.width = (size * scaleDisp) + 'px';
     brushCursor.style.height = (size * scaleDisp) + 'px';
-    brushCursor.style.left = e.offsetX + 'px';
-    brushCursor.style.top = e.offsetY + 'px';
+    brushCursor.style.left = (e.clientX - rect.left) + 'px';
+    brushCursor.style.top = (e.clientY - rect.top) + 'px';
     brushCursor.classList.toggle('erase', mode === 'erase');
   }
 
@@ -644,9 +649,9 @@
     strokeTo(x, y);
   });
   canvas.addEventListener('pointermove', e => {
-    const {x, y} = paintCoords(e);
+    const {x, y, rect} = paintCoords(e);
     brushCursor.style.display = 'block';
-    updateCursor(e);
+    updateCursor(e, rect);
     if(!drawing) return;
     strokeTo(x, y);
   });
